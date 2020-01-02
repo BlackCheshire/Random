@@ -1,0 +1,252 @@
+.run-db-migrations:
+    stage: run db migrations
+    image: docker:latest
+    services:
+        - docker:dind
+    script:
+        - docker run -e "TargetDb=${TargetDb}" ${PROGET_REGISTRY_URL}/${PROJECT_NAME}-db-migrator:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}
+
+.run-test-build-app:
+    stage: run unit tests and build
+    cache: {}
+    image: microsoft/dotnet:2.2-sdk
+    script:
+        - dotnet restore -s https://proget.test.online/nuget/nuget/ -s https://api.nuget.org/v3/index.json -s https://repo-dev.test.ru/NugetFeed/nuget 
+        - dotnet build -c Release
+        - dotnet publish -c Release -o artifacts/application
+    artifacts:
+        name: "${PROJECT_NAME}-${CI_COMMIT_REF_SLUG}"
+        paths:
+            - ${GITLAB_PROJECT_NAME}.WebApi/artifacts/application
+        expire_in: 3 days
+
+.build-db-migrator:
+    stage: run unit tests and build
+    cache: {}
+    image: microsoft/dotnet:2.2-sdk
+    script:
+        - dotnet restore ${GITLAB_PROJECT_NAME}.DbMigrations/${GITLAB_PROJECT_NAME}.DbMigrations.csproj -s https://proget.test.online/nuget/nuget/ -s https://api.nuget.org/v3/index.json
+        - dotnet publish ${GITLAB_PROJECT_NAME}.DbMigrations/${GITLAB_PROJECT_NAME}.DbMigrations.csproj -c Release -o artifacts/db-migrator
+    artifacts:
+        name: "${PROJECT_NAME}-${CI_COMMIT_REF_SLUG}"
+        paths:
+            - ${GITLAB_PROJECT_NAME}.DbMigrations/artifacts/db-migrator
+        expire_in: 3 days
+
+.publish-app-image:
+    stage: publish images
+    cache: {}
+    image: docker:latest
+    services: 
+        - docker:dind
+    before_script:
+        - docker login -u ${PROGET_USERNAME} -p ${PROGET_PASSWORD} ${PROGET_REGISTRY_URL}
+    after_script:
+        - docker logout ${PROGET_REGISTRY_URL}
+    script:
+        - docker build -t ${PROGET_REGISTRY_URL}/${PROJECT_NAME}:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA} -t ${PROGET_REGISTRY_URL}/mis/${PROJECT_NAME}:${CI_COMMIT_REF_SLUG}-latest .
+        - docker push ${PROGET_REGISTRY_URL}/mis/${PROJECT_NAME}:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}
+        - docker push ${PROGET_REGISTRY_URL}/mis/${PROJECT_NAME}:${CI_COMMIT_REF_SLUG}-latest
+
+.publish-db-migrator-image:
+    stage: publish images
+    cache: {}
+    image: docker:latest
+    services:
+        - docker:dind
+    before_script:
+        - docker login -u ${PROGET_USERNAME} -p ${PROGET_PASSWORD} ${PROGET_REGISTRY_URL}
+    after_script:
+        - docker logout ${PROGET_REGISTRY_URL}
+    script:
+        - cp ${GITLAB_PROJECT_NAME}.DbMigrations/*.json ${GITLAB_PROJECT_NAME}.DbMigrations/artifacts/db-migrator/
+        - docker build -t ${PROGET_REGISTRY_URL}/${PROJECT_NAME}-db-migrator:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}  ${GITLAB_PROJECT_NAME}.DbMigrations/
+        - docker push ${PROGET_REGISTRY_URL}/${PROJECT_NAME}-db-migrator:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}
+
+.build-k8s-manifest:
+    stage: build k8s manifest
+    cache: {}
+    dependencies: []
+    image: proget.test.online:443/registry/images/ssh-exec:stretch-slim
+    before_script:
+        - eval $(ssh-agent -s)
+        - echo "${K8S_DEPLOY_KEY}" | ssh-add - > /dev/null
+        - ssh-keyscan "${K8S_DEPLOY_HOST}" >> ~/.ssh/known_hosts
+    script:
+        - envsubst < .gitlab-ci-k8s-template.yml > ${PROJECT_NAME}-${PROJECT_CONFIGURATION}.yml
+        - scp ${PROJECT_NAME}-${PROJECT_CONFIGURATION}.yml ${K8S_DEPLOY_USER}@${K8S_DEPLOY_HOST}:${K8S_DEPLOY_DIR}
+        - ssh ${K8S_DEPLOY_USER}@${K8S_DEPLOY_HOST} "/usr/bin/kubectl apply -f ${K8S_DEPLOY_DIR}/${PROJECT_NAME}-${PROJECT_CONFIGURATION}.yml"
+
+###################################################################
+
+stages:
+    - run unit tests and build
+    - publish images
+    - run db migrations
+    - build k8s manifest
+    - run db migrations for stage
+    - deploy to stage
+    - run db migrations for prod
+    - deploy to prod
+
+###############RUNNING TESTS AND BUILDING THE PROJECT##############
+
+run-test-build-app:dev:
+    extends: .run-test-build-app
+    variables:
+    only:
+    - develop
+
+run-test-build-app:test:
+    extends: .run-test-build-app
+    only:
+    - master
+
+build-db-migrator:dev:
+    extends: .build-db-migrator
+    variables:
+    only:
+    - develop
+
+build-db-migrator:test:
+    extends: .build-db-migrator
+    variables:
+    only:
+    - master
+
+##########################PUBLISHING DOCKER IMAGES##################
+
+publish-app-image:dev:
+    extends: .publish-app-image
+    dependencies:
+        - run-test-build-app:dev
+        - build-db-migrator:dev
+    only:
+    - develop
+
+publish-db-migrator-image:dev:
+    extends: .publish-db-migrator-image
+    dependencies:
+        - run-test-build-app:dev
+        - build-db-migrator:dev
+    only:
+    - develop
+
+publish-app-image:test:
+    extends: .publish-app-image
+    dependencies:
+        - run-test-build-app:test
+        - build-db-migrator:test
+
+    only:
+    - master
+
+publish-db-migrator-image:test:
+    extends: .publish-db-migrator-image
+    dependencies:
+        - run-test-build-app:test
+        - build-db-migrator:test
+
+    only:
+    - master
+
+#######################RUNNING DB MIGRATIONS#########################
+
+run-db-migrations:dev:
+    extends: .run-db-migrations
+    variables:
+        TargetDb: ${TargetDb_dev}
+    only:
+    - develop
+
+run-db-migrations:test:
+    extends: .run-db-migrations
+    variables:
+        TargetDb: ${TargetDb_test}
+    only:
+    - master
+
+run-db-migrations:stage:
+    extends: .run-db-migrations
+    stage: run db migrations for stage
+    variables:
+        TargetDb: ${TargetDb_stage}
+    when: manual
+    only:
+    - master
+
+run-db-migrations:prod:
+    extends: .run-db-migrations
+    stage: run db migrations for prod
+    variables:
+        TargetDb: ${TargetDb_prod}
+    when: manual
+    only:
+    - master
+
+#########################K8S MANIFEST BUILDING########################
+
+build-k8s-manifest:dev:
+    extends: .build-k8s-manifest
+    environment:  
+        name: dev
+    variables:
+        EtcdOptions_Hostname: 8.8.8.8
+        EtcdOptions_Port: 2379
+        EtcdOptions_Username: DevUser
+        EtcdOptions_Prefix: /dev/develop/
+        EtcdOptions_Password: password
+        PROJECT_CONFIGURATION: dev
+        PROJECT_IP: 8.8.8.8
+    only:
+    - develop
+
+
+build-k8s-manifest:test:
+    extends: .build-k8s-manifest
+    environment:
+        name: test
+    variables:
+        EtcdOptions_Hostname: 8.8.8.8
+        EtcdOptions_Port: 2379
+        EtcdOptions_Username: DevUser
+        EtcdOptions_Prefix: /dev/test/
+        EtcdOptions_Password: password
+        PROJECT_CONFIGURATION: test
+        PROJECT_IP: 8.8.8.8
+    only:
+    - master
+
+build-k8s-manifest:stage:
+    extends: .build-k8s-manifest
+    stage: deploy to stage
+    environment:
+        name: stage
+    variables:
+        EtcdOptions_Hostname: 8.8.8.8
+        EtcdOptions_Port: 2379
+        EtcdOptions_Username: DevUser
+        EtcdOptions_Prefix: /dev/stage/
+        EtcdOptions_Password: password
+        PROJECT_CONFIGURATION: stage
+        PROJECT_IP: 8.8.8.8
+    when: manual
+    only:
+    - master
+
+build-k8s-manifest:prod:
+    extends: .build-k8s-manifest
+    stage: deploy to prod
+    environment:
+        name: prod
+    variables:
+        EtcdOptions_Hostname: 8.8.8.8
+        EtcdOptions_Port: 2379
+        EtcdOptions_Username: ProdUser
+        EtcdOptions_Prefix: /prod/
+        EtcdOptions_Password: password_prod
+        PROJECT_CONFIGURATION: prod
+        PROJECT_IP: 8.8.8.8
+    when: manual
+    only:
+    - master
