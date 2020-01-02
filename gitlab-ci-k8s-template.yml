@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${PROJECT_NAME}
+
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: ${PROJECT_NAME}-${PROJECT_CONFIGURATION}
+  labels:
+    app: ${PROJECT_NAME}
+    environment: ${PROJECT_CONFIGURATION}
+  namespace: ${PROJECT_NAME}
+spec:
+  replicas: 2
+  revisionHistoryLimit: 10
+  selector:
+    matchLabels:
+      app: ${PROJECT_NAME}
+      environment: ${PROJECT_CONFIGURATION}
+  strategy:
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 1}
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app: ${PROJECT_NAME}
+        environment: ${PROJECT_CONFIGURATION}
+    spec:
+      containers:
+        - name: ${PROJECT_NAME}-${PROJECT_CONFIGURATION}
+          image: ${PROGET_REGISTRY_URL}/mis/${PROJECT_NAME}:${CI_COMMIT_REF_SLUG}-${CI_COMMIT_SHORT_SHA}
+          env:
+           - name: EtcdOptions_Hostname
+             value: ${EtcdOptions_Hostname}
+           - name: EtcdOptions_Port
+             value: '${EtcdOptions_Port}'
+           - name: EtcdOptions_Username
+             value: ${EtcdOptions_Username}
+           - name: EtcdOptions_Prefix
+             value: ${EtcdOptions_Prefix}
+           - name: EtcdOptions_Password
+             valueFrom:
+               secretKeyRef:
+                 name: etcd-vars
+                 key: ${EtcdOptions_Password}   
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh","-c","sleep 5"]
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /liveness
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /hc
+              port: 80
+              scheme: HTTP
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "0.3"
+            limits:
+              memory: "512Mi"
+              cpu: "0.5"
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ${PROJECT_NAME}-${PROJECT_CONFIGURATION}
+  labels:
+    app: ${PROJECT_NAME}
+    environment: ${PROJECT_CONFIGURATION}
+  namespace: ${PROJECT_NAME}
+spec:
+  type: LoadBalancer
+  loadBalancerIP: ${PROJECT_IP}
+  ports:
+    - port: 80
+      targetPort: 80
+      protocol: TCP
+      name: http
+  selector:
+    app: ${PROJECT_NAME}
+    environment: ${PROJECT_CONFIGURATION}
