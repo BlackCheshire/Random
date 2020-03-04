@@ -1,0 +1,77 @@
+name: projects/${gcp_project}/dashboards/${rds_name}-AWSRDS
+displayName: RDS ${rds_name}
+gridLayout:
+  columns: '2'
+  widgets:
+  - title: CPU utilization for ${rds_name}
+    xyChart:
+      chartOptions:
+        mode: COLOR
+      dataSets:
+      - minAlignmentPeriod: 60s
+        plotType: LINE
+        timeSeriesQuery:
+          timeSeriesFilter:
+            aggregation:
+              perSeriesAligner: ALIGN_RATE
+            filter: metric.type="aws.googleapis.com/RDS/CPUUtilization/Sum" resource.type="aws_rds_database"
+              resource.label."name"="${rds_name}"
+          unitOverride: '1'
+      timeshiftDuration: 0s
+      yAxis:
+        label: y1Axis
+        scale: LINEAR
+  - title: Average available storage for ${rds_name}
+    xyChart:
+      chartOptions:
+        mode: COLOR
+      dataSets:
+      - minAlignmentPeriod: 60s
+        plotType: LINE
+        timeSeriesQuery:
+          timeSeriesFilter:
+            aggregation:
+              perSeriesAligner: ALIGN_MEAN
+            filter: metric.type="aws.googleapis.com/RDS/FreeStorageSpace/Average"
+              resource.type="aws_rds_database" resource.label."name"="${rds_name}"
+          unitOverride: By
+      timeshiftDuration: 0s
+      yAxis:
+        label: y1Axis
+        scale: LINEAR
+  - title: Available memory for ${rds_name}
+    xyChart:
+      chartOptions:
+        mode: COLOR
+      dataSets:
+      - minAlignmentPeriod: 60s
+        plotType: LINE
+        timeSeriesQuery:
+          timeSeriesFilter:
+            aggregation:
+              perSeriesAligner: ALIGN_RATE
+            filter: metric.type="aws.googleapis.com/RDS/FreeableMemory/Sum" resource.type="aws_rds_database"
+              resource.label."name"="${rds_name}"
+          unitOverride: By
+      timeshiftDuration: 0s
+      yAxis:
+        label: y1Axis
+        scale: LINEAR
+  - title: Database connections for ${rds_name}
+    xyChart:
+      chartOptions:
+        mode: COLOR
+      dataSets:
+      - minAlignmentPeriod: 60s
+        plotType: LINE
+        timeSeriesQuery:
+          timeSeriesFilter:
+            aggregation:
+              perSeriesAligner: ALIGN_SUM
+            filter: metric.type="aws.googleapis.com/RDS/DatabaseConnections/Sum" resource.type="aws_rds_database"
+              resource.label."name"="${rds_name}"
+          unitOverride: '1'
+      timeshiftDuration: 0s
+      yAxis:
+        label: y1Axis
+        scale: LINEAR
